@@ -8,8 +8,6 @@ is available.
 - `>>` / `<<`: indent / unindent. Counts work (`3>>`); Visual mode uses `>` / `<`.
   Indentation applies to paragraphs/list items covered by the selected displayed lines.
 - `D` / `C`: delete to line end / delete and enter Insert.
-- `dd` / `yy` / `cc`: delete / copy / change whole lines, including counts (`2dd`,
-  `d2d`, `3yy`). After a line copy or delete, `p` / `P` paste below / above.
 - Normal `f<char>` / `t<char>`: move onto / just before a character on the line.
   `F` / `T` search backward; counts work (`2f,`). `;` repeats and `,` reverses.
 - `dt<char>` / `df<char>`: delete before / through the next character on the line.
@@ -21,10 +19,6 @@ is available.
 
 Press Enter to run a command or Esc to cancel. Macros and rectangular selection
 are not supported.
-
-A browser extension that brings Vim-style keyboard shortcuts to Google Docs, allowing you to edit documents with familiar Vim motions and commands.
-
-While this extension currently implements core Vim functionality including basic motions, text manipulation, and visual selections, there's room for expansion. Contributions are welcome to add more Vim features as per your need.
 
 If you are using DocsKeys with Vimium, disable Vimium on Google Docs.
 
@@ -75,9 +69,9 @@ This project is heavily inspired by and uses much of code from [SheetKeys](https
 - `Ctrl` + `o` - Temporary normal mode from insert mode
 
 #### Text Manipulation
-- `d` + motion - Delete (supports `dw`, `diw`, `dp`, `dip`, `dd`, `d_`, `d0`, `d$`)
-- `c` + motion - Change (supports `cw`, `ciw`, `cp`, `cip`, `cc`, `c^`)
-- `y` + motion - Yank/copy (supports `yw`, `yiw`, `yp`, `yip`, `yy`, `y0`)
+- `d` + motion - Delete (supports `dw`, `diw`, `dp`, `dip`, `d_`, `d0`, `d$`)
+- `c` + motion - Change (supports `cw`, `ciw`, `cp`, `cip`, `c^`)
+- `y` + motion - Yank/copy (supports `yw`, `yiw`, `yp`, `yip`, `y0`)
 - `p` - Paste
 - `u` - Undo
 - `r` - Redo
@@ -127,6 +121,8 @@ When in visual mode (`v` or `V`):
 
 ## Known Limitations
 
+- Whole-line operations are not supported; select text with `v`/`V`, then use `d`, `c`, or `y`.
+- Clipboard commands depend on Google Docs/browser clipboard access.
 - Most advanced Vim features like marks, macros, and registers are not supported
 - Custom key mappings are not supported
 - PR's are welcome to add these features

@@ -23,7 +23,6 @@ let pendingFind = null
 let lastFind = null
 let operatorCount = 1
 let operatorMotionCount = 0
-let linewiseYank = null
 let operation = null
 let editRequestId = 0
 const settle = async () => {
@@ -215,7 +214,6 @@ function focusEditor() {
 }
 
 function deleteToEnd(change) {
-    linewiseYank = null
     selectToEndOfLine()
     if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('backspace')
     if (change) switchModeToInsert()
@@ -252,7 +250,6 @@ function findCharacter(character, repeat = false) {
     if (!operator) switchModeToNormal()
     else if (operator === 'y') runLongStringOp('y')
     else {
-        linewiseYank = null
         if (!sel.isCollapsed) sendKeyEvent('backspace')
         if (operator === 'c') switchModeToInsert()
         else switchModeToNormal()
@@ -265,49 +262,6 @@ function repeatFind(reverse, count = 1) {
         ? lastFind.motion.toUpperCase() : lastFind.motion.toLowerCase()) : lastFind.motion
     startFind(motion, count)
     findCharacter(lastFind.character, true)
-}
-
-function operateLines(operator, count) {
-    const sel = iframe.contentWindow.getSelection()
-    // Selection.toString() can omit a final line break even when it is selected.
-    const selectedText = () => sel.toString() || (sel.rangeCount ? sel.getRangeAt(0).toString() : '')
-    goToStartOfLine()
-    sendKeyEvent('left', { shift: true })
-    const previous = selectedText()
-    if (!sel.isCollapsed) sendKeyEvent('right')
-    for (let i = 1; i < count; i++) sendKeyEvent('down', { shift: true })
-    selectToEndOfLine()
-    const text = selectedText()
-    const endNode = sel.focusNode, endOffset = sel.focusOffset
-    sendKeyEvent('right', { shift: true })
-    const next = selectedText().slice(text.length)
-    if (sel.focusNode !== endNode || sel.focusOffset !== endOffset) sendKeyEvent('left', { shift: true })
-    if (text) {
-        clickMenu(menuItems.copy)
-        focusEditor()
-        if (operator !== 'y') sendKeyEvent('backspace')
-        else sendKeyEvent('left')
-    }
-    linewiseYank = { empty: !text }
-    if (operator === 'd') {
-        if (/^[\r\n]+$/.test(next)) sendKeyEvent('delete')
-        else if (!next && /^[\r\n]+$/.test(previous)) sendKeyEvent('backspace')
-        goToStartOfLine()
-    }
-    mode = 'normal'
-    if (operator === 'c') switchModeToInsert()
-    else switchModeToNormal()
-}
-
-function paste(above = false) {
-    if (linewiseYank) {
-        if (above) goToStartOfLine()
-        else goToEndOfLine()
-        sendKeyEvent('enter')
-        if (above) { sendKeyEvent('up'); goToStartOfLine() }
-        if (!linewiseYank.empty) clickMenu(menuItems.paste)
-        goToStartOfLine()
-    } else clickMenu(menuItems.paste)
 }
 
 async function runOperation(action) {
@@ -499,7 +453,6 @@ function addLineBottom() {
 }
 
 function runLongStringOp(operation = longStringOp) {
-    linewiseYank = null
     clickMenu(operation === 'y' ? menuItems.copy : menuItems.cut)
     if (operation === 'c') switchModeToInsert()
     else {
@@ -571,10 +524,8 @@ function waitForFirstInput(key) {
             goToDocStart(true)
             runLongStringOp()
             break
-        case longStringOp:
-            operateLines(longStringOp, operatorCount * (operatorMotionCount || 1))
-            break
         default:
+            mode = 'normal'
             switchModeToNormal()
     }
 }
@@ -641,7 +592,6 @@ function eventHandler(e) {
         tempnormal = true
         return;
     }
-    if ((e.ctrlKey || e.metaKey) && ['c', 'x'].includes(e.key.toLowerCase())) linewiseYank = null
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key == 'Escape') {
         e.preventDefault()
@@ -769,10 +719,7 @@ function handleKeyEventNormal(key, count = 1) {
             mode = "waitForFirstInput"
             break
         case "p":
-            paste()
-            break
-        case 'P':
-            paste(true)
+            clickMenu(menuItems.paste)
             break
         case "a":
             sendKeyEvent("right")
