@@ -8,6 +8,10 @@ is available.
 - `>>` / `<<`: indent / unindent. Counts work (`3>>`); Visual mode uses `>` / `<`.
   Indentation applies to paragraphs/list items covered by the selected displayed lines.
 - `D` / `C`: delete to line end / delete and enter Insert.
+- `dd` / `yy` / `cc`: delete / copy / change whole lines, including counts (`2dd`,
+  `d2d`, `3yy`). After a line copy or delete, `p` / `P` paste below / above.
+- Normal `f<char>` / `t<char>`: move onto / just before a character on the line.
+  `F` / `T` search backward; counts work (`2f,`). `;` repeats and `,` reverses.
 - `dt<char>` / `df<char>`: delete before / through the next character on the line.
 - Normal `~`, Visual `U` / `u` / `~`: toggle case, uppercase or lowercase using Docs'
   native commands to preserve formatting. Normal `u` remains Undo.
