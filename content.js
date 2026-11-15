@@ -278,9 +278,10 @@ function operateLines(operator, count) {
     for (let i = 1; i < count; i++) sendKeyEvent('down', { shift: true })
     selectToEndOfLine()
     const text = selectedText()
+    const endNode = sel.focusNode, endOffset = sel.focusOffset
     sendKeyEvent('right', { shift: true })
     const next = selectedText().slice(text.length)
-    if (next) sendKeyEvent('left', { shift: true })
+    if (sel.focusNode !== endNode || sel.focusOffset !== endOffset) sendKeyEvent('left', { shift: true })
     if (text) {
         clickMenu(menuItems.copy)
         focusEditor()
@@ -289,8 +290,8 @@ function operateLines(operator, count) {
     }
     linewiseYank = { empty: !text }
     if (operator === 'd') {
-        if (next === '\n') sendKeyEvent('delete')
-        else if (!next && previous === '\n') sendKeyEvent('backspace')
+        if (/^[\r\n]+$/.test(next)) sendKeyEvent('delete')
+        else if (!next && /^[\r\n]+$/.test(previous)) sendKeyEvent('backspace')
         goToStartOfLine()
     }
     mode = 'normal'
