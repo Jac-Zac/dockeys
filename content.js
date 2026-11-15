@@ -20,20 +20,22 @@ iframe.contentDocument.addEventListener('keydown', eventHandler, true)
 let mode = 'normal'
 let pendingIndent = null
 let pendingFind = null
-let operationRunning = false
+let operation = null
 let editRequestId = 0
-const settle = () => new Promise(resolve => setTimeout(resolve, 50))
+const settle = async () => {
+    await new Promise(resolve => setTimeout(resolve, 50))
+    operation?.signal.throwIfAborted()
+}
 let cursorRoot = null
 
 function updateCursorAppearance() {
     // Collaborator cursors have a name label; the local cursor's label is empty.
-    const nextRoot = Array.from(document.querySelectorAll('.kix-cursor')).find(cursor =>
-        cursor.querySelector('.kix-cursor-caret') &&
-        !cursor.querySelector('.kix-cursor-name')?.textContent.trim()
-    )
-    if (cursorRoot !== nextRoot) {
+    if (!cursorRoot?.isConnected || cursorRoot.querySelector('.kix-cursor-name')?.textContent.trim()) {
         cursorRoot?.classList.remove('docskeys-block-cursor')
-        cursorRoot = nextRoot
+        cursorRoot = Array.from(document.querySelectorAll('.kix-cursor')).find(cursor =>
+            cursor.querySelector('.kix-cursor-caret') &&
+            !cursor.querySelector('.kix-cursor-name')?.textContent.trim()
+        )
     }
     cursorRoot?.classList.toggle('docskeys-block-cursor', mode !== 'insert')
 }
@@ -49,9 +51,7 @@ let multipleMotion = {
     mode:"normal"
 }
 
-// How to simulate a keypress in Chrome: http://stackoverflow.com/a/10520017/46237
-// Note that we have to do this keypress simulation in an injected script, because events dispatched
-// by content scripts do not preserve overridden properties.
+// Simulate Docs keypresses in the page context.
 const script = document.createElement("script");
 script.src = chrome.runtime.getURL("page_script.js");
 document.documentElement.appendChild(script);
@@ -165,12 +165,6 @@ function switchModeToInsert() {
     updateModeIndicator(mode)
 }
 
-function switchModeToWait() {
-    mode = "waitForFirstInput"
-    updateModeIndicator(mode)
-    // define cursor style
-}
-
 function switchModeToWait2() {
     mode = "waitForSecondInput"
     updateModeIndicator(mode)
@@ -212,7 +206,8 @@ function indentLines(key, count = 1) {
 function focusEditor() {
     iframe.contentWindow.focus()
     const doc = iframe.contentDocument
-    ;(doc.querySelector('[contenteditable="true"]') || doc.body).focus()
+    const editor = doc.querySelector('[contenteditable="true"]') || doc.body
+    editor.focus()
 }
 
 function deleteToEnd(change) {
@@ -223,7 +218,7 @@ function deleteToEnd(change) {
 }
 
 function findForOperator(character) {
-    const find = pendingFind
+    const motion = pendingFind
     pendingFind = null
     selectToEndOfLine()
     const sel = iframe.contentWindow.getSelection()
@@ -231,26 +226,26 @@ function findForOperator(character) {
     if (!sel.isCollapsed) sendKeyEvent('left')
     const index = remaining.indexOf(character, 1)
     if (index < 0) { switchModeToNormal(); return }
-    const count = index + (find.motion === 'f' ? 1 : 0)
+    const count = index + (motion === 'f' ? 1 : 0)
     for (let i = 0; i < count; i++) sendKeyEvent('right', { shift: true })
-    if (find.operator === 'y') runLongStringOp('y')
+    if (longStringOp === 'y') runLongStringOp('y')
     else {
         sendKeyEvent('backspace')
-        if (find.operator === 'c') switchModeToInsert()
+        if (longStringOp === 'c') switchModeToInsert()
         else switchModeToNormal()
     }
 }
 
 async function runOperation(action) {
-    if (operationRunning) return
-    operationRunning = true
+    if (operation) return
+    operation = new AbortController()
     try { await action() }
-    catch (error) { console.warn('DocsKeys:', error) }
-    finally { operationRunning = false; switchModeToNormal() }
+    catch (error) { if (!operation.signal.aborted) console.warn('DocsKeys:', error) }
+    finally { operation = null; mode = 'normal'; switchModeToNormal() }
 }
 
 document.addEventListener('keydown', event => {
-    if (operationRunning && event.key === 'Escape') operationRunning = false
+    if (event.key === 'Escape') operation?.abort()
 }, true)
 
 function replaceText(text) {
@@ -273,14 +268,11 @@ function replaceText(text) {
 }
 
 async function capitalizeSelection(label) {
-    const format = Array.from(document.querySelectorAll('.menu-button')).find(el => el.textContent.trim() === 'Format')
-    if (!format) throw new Error('Format menu unavailable')
-    simulateClick(format)
+    activateTopLevelMenu('Format')
     for (const caption of ['Text', 'Capitalization', label]) {
         let item
-        for (let attempt = 0; attempt < 30 && operationRunning; attempt++) {
-            item = Array.from(document.querySelectorAll('.goog-menuitem')).find(el =>
-                el.getClientRects().length > 0 && el.innerText.trim().toLowerCase().startsWith(caption.toLowerCase()))
+        for (let attempt = 0; attempt < 30; attempt++) {
+            item = findMenuItem({ caption })
             if (item) break
             await settle()
         }
@@ -293,31 +285,32 @@ async function capitalizeSelection(label) {
 
 function changeCase(key, count = 1) {
     const visual = mode === 'visual' || mode === 'visualLine'
-    const selected = iframe.contentWindow.getSelection().toString()
     void runOperation(async () => {
+        if (key === '~' && !visual) selectToEndOfLine()
+        const sel = iframe.contentWindow.getSelection()
+        const selected = sel.toString()
+        if (!selected) return
         if (key === 'U' || key === 'u') {
-            if (!selected) return
             await capitalizeSelection(key === 'U' ? 'UPPERCASE' : 'lowercase')
-            if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('left')
+            if (!sel.isCollapsed) sendKeyEvent('left')
             return
         }
-        if (visual) {
-            count = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(selected)).length
-            if (selected) sendKeyEvent('left')
-        }
-        for (let i = 0; i < count && operationRunning; i++) {
-            sendKeyEvent('right', { shift: true })
+        const characters = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(selected), part => part.segment)
+            .slice(0, visual ? undefined : count)
+        const upper = character => character === character.toLowerCase()
+        sendKeyEvent('left')
+        // One native capitalization command per run of the same case, preserving formatting.
+        for (let start = 0; start < characters.length;) {
+            let end = start + 1
+            while (end < characters.length && upper(characters[end]) === upper(characters[start])) end++
+            for (let i = start; i < end; i++) sendKeyEvent('right', { shift: true })
             await settle()
-            const sel = iframe.contentWindow.getSelection()
-            const character = sel.toString()
-            if (!character || (!visual && /[\r\n]/.test(character))) {
-                if (!sel.isCollapsed) sendKeyEvent('left')
-                break
+            const text = sel.toString()
+            if (text.toLowerCase() !== text.toUpperCase()) {
+                await capitalizeSelection(upper(characters[start]) ? 'UPPERCASE' : 'lowercase')
             }
-            if (character.toLowerCase() !== character.toUpperCase()) {
-                await capitalizeSelection(character === character.toLowerCase() ? 'UPPERCASE' : 'lowercase')
-            }
-            if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('right')
+            if (!sel.isCollapsed) sendKeyEvent('right')
+            start = end
         }
     })
 }
@@ -359,12 +352,13 @@ function openCommandLine() {
             }
             const sel = iframe.contentWindow.getSelection()
             if (sel.focusOffset > 0) goToStartOfPara()
-            for (let i = rows.length - 1; i >= 0 && operationRunning; i--) {
+            for (let i = rows.length - 1; i >= 0; i--) {
                 if (document.activeElement !== iframe || !document.hasFocus()) break
                 if (match[1] === 'A' && rows[i]) sendKeyEvent('down', paragraphMods())
                 else if (match[1] === 'A') goToEndOfLine()
                 await settle()
                 await replaceText(match[2])
+                operation.signal.throwIfAborted()
                 goToStartOfPara()
                 if (i > 0) goToStartOfPara()
             }
@@ -406,11 +400,6 @@ function goToDocEnd(shift = false) {
     }
 }
 
-function goToTop() {
-    goToDocStart(true)
-    longStringOp = ""
-}
-
 function selectToEndOfPara() {
     sendKeyEvent("down", paragraphMods(true))
 }
@@ -436,29 +425,11 @@ function addLineBottom() {
 }
 
 function runLongStringOp(operation = longStringOp) {
-    switch (operation) {
-        case "c":
-            clickMenu(menuItems.cut)
-            switchModeToInsert()
-            break
-        case "d":
-            clickMenu(menuItems.cut)
-            mode = 'normal'
-            switchModeToNormal()
-            break
-        case "y":
-            clickMenu(menuItems.copy)
-            switchModeToNormal()
-            break
-        case "p":
-            clickMenu(menuItems.paste)
-            switchModeToNormal()
-            break
-        case "v":
-            break
-        case "g":
-            goToTop()
-            break
+    clickMenu(operation === 'y' ? menuItems.copy : menuItems.cut)
+    if (operation === 'c') switchModeToInsert()
+    else {
+        if (operation === 'd') mode = 'normal'
+        switchModeToNormal()
     }
 }
 
@@ -483,7 +454,7 @@ function waitForFirstInput(key) {
     switch (key) {
         case 't':
         case 'f':
-            pendingFind = { motion: key, operator: longStringOp }
+            pendingFind = key
             mode = 'waitForFindCharacter'
             break
         case "i":
@@ -542,19 +513,14 @@ function waitForVisualInput(key) {
 }
 
 function handleMultipleMotion(key) {
-    if (/[0-9]/.test(key)) {
+    if (/^[0-9]$/.test(key)) {
         multipleMotion.times = Number(String(multipleMotion.times)+key)
         return
     }
 
-    if (multipleMotion.mode === 'normal' && (key === '>' || key === '<')) {
-        pendingIndent = { key, count: multipleMotion.times }
+    if (multipleMotion.mode === 'normal' && ['>', '<', '~'].includes(key)) {
         mode = 'normal'
-        return
-    }
-    if (multipleMotion.mode === 'normal' && key === '~') {
-        mode = 'normal'
-        changeCase(key, multipleMotion.times)
+        handleKeyEventNormal(key, multipleMotion.times)
         return
     }
 
@@ -577,9 +543,9 @@ function eventHandler(e) {
     if (
         ["Shift","Meta","Control","Alt",""].includes(e.key)
     ) return
-    if (operationRunning) {
+    if (operation) {
         e.preventDefault()
-        if (e.key === 'Escape') operationRunning = false
+        if (e.key === 'Escape') operation.abort()
         return
     }
         
@@ -644,8 +610,8 @@ function eventHandler(e) {
     }
 }
 
-function handleKeyEventNormal(key) {
-    if (/[1-9]/.test(key)) {
+function handleKeyEventNormal(key, count = 1) {
+    if (/^[1-9]$/.test(key)) {
         mode = "multipleMotion"
         multipleMotion.mode = "normal"
         multipleMotion.times = Number(key)
@@ -657,7 +623,7 @@ function handleKeyEventNormal(key) {
             openCommandLine()
             break
         case '~':
-            changeCase(key)
+            changeCase(key, count)
             break
         case 'D':
         case 'C':
@@ -665,7 +631,7 @@ function handleKeyEventNormal(key) {
             break
         case '>':
         case '<':
-            pendingIndent = { key, count: 1 }
+            pendingIndent = { key, count }
             break
         case "h":
             sendKeyEvent("left")
@@ -778,7 +744,7 @@ function handleKeyEventNormal(key) {
 }
 
 function handleKeyEventVisualLine(key) {
-    if (/[1-9]/.test(key)) {
+    if (/^[1-9]$/.test(key)) {
         mode = "multipleMotion"
         multipleMotion.mode = "visualLine"
         multipleMotion.times = Number(key)
@@ -872,28 +838,6 @@ function clickMenu(itemCaption) {
     simulateClick(getMenuItem(itemCaption));
 }
 
-function clickToolbarButton(captionList) {
-    // Sometimes a toolbar button won't exist in the DOM until its parent has been clicked, so we
-    // click all of its parents in sequence.
-    for (const caption of Array.from(captionList)) {
-        const els = document.querySelectorAll(`*[aria-label='${caption}']`);
-        if (els.length == 0) {
-            console.log(`Couldn't find the element for the button labeled ${caption}.`);
-            console.log(captionList);
-            return;
-        }
-        // Sometimes there are multiple elements that have the same label. When that happens, it's
-        // ambiguous which one to click, so we log it so it's easier to debug.
-        if (els.length > 1) {
-            console.log(
-                `Warning: there are multiple buttons with the caption ${caption}. ` +
-                "We're expecting only 1.",
-            );
-            console.log(captionList);
-        }
-        simulateClick(els[0]);
-    }
-}
 // Returns the DOM element of the menu item with the given caption. Prints a warning if a menu
 // item isn't found (since this is a common source of errors in SheetKeys) unless silenceWarning
 // is true.
@@ -901,7 +845,7 @@ function clickToolbarButton(captionList) {
 function getMenuItem(menuItem, silenceWarning = false) {
     const caption = menuItem.caption;
     let el = menuItemElements[caption];
-    if (el) return el;
+    if (el?.isConnected) return el;
     el = findMenuItem(menuItem);
     if (!el) {
         if (!silenceWarning) console.error("Could not find menu item with caption", menuItem.caption);
@@ -911,48 +855,16 @@ function getMenuItem(menuItem, silenceWarning = false) {
 }
 
 function findMenuItem(menuItem) {
-    activateTopLevelMenu(menuItem.parent);
-    const menuItemEls = document.querySelectorAll(".goog-menuitem");
-    const caption = menuItem.caption;
-    const isRegexp = caption instanceof RegExp;
-    for (const el of Array.from(menuItemEls)) {
-        const label = el.innerText;
-        if (!label) continue;
-        if (isRegexp) {
-            if (caption.test(label)) {
-                return el;
-            }
-        } else {
-            if (label.startsWith(caption)) {
-                return el;
-            }
-        }
+    if (menuItem.parent) activateTopLevelMenu(menuItem.parent);
+    for (const el of document.querySelectorAll(".goog-menuitem")) {
+        if (el.getClientRects().length && el.innerText.startsWith(menuItem.caption)) return el;
     }
     return null;
 }
 
-function simulateClick(el, x = 0, y = 0) {
-    const eventSequence = ["mouseover", "mousedown", "mouseup", "click"];
-    for (const eventName of eventSequence) {
-        const event = document.createEvent("MouseEvents");
-        event.initMouseEvent(
-            eventName,
-            true, // bubbles
-            true, // cancelable
-            window, //view
-            1, // event-detail
-            x, // screenX
-            y, // screenY
-            x, // clientX
-            y, // clientY
-            false, // ctrl
-            false, // alt
-            false, // shift
-            false, // meta
-            0, // button
-            null, // relatedTarget
-        );
-        el.dispatchEvent(event);
+function simulateClick(el) {
+    for (const type of ["mouseover", "mousedown", "mouseup", "click"]) {
+        el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window, detail: 1 }));
     }
 }
 
@@ -962,9 +874,6 @@ function activateTopLevelMenu(menuCaption) {
     if (!button) {
         throw new Error(`Couldn't find top-level button with caption ${menuCaption}`);
     }
-    // Unlike submenus, top-level menus can be hidden by clicking the button a second time to
-    // dismiss the menu.
-    simulateClick(button);
     simulateClick(button);
 }
 

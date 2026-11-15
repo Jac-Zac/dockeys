@@ -1,31 +1,22 @@
 # DocsKeys
 
-This local build adds a translucent blue block cursor in Normal and Visual modes,
-and restores Google's caret in Insert mode. The block follows the caret and scales
-with its height; its width is approximate for proportional fonts.
-`Esc` leaves Insert mode on the last character when Braille text is available.
-On macOS, line motions (`0`, `$`, `I`, `A`, and selections using them) now use
-Command+Left/Right instead of Home/End.
+This fork adds a blue block cursor in Normal/Visual modes and keeps Docs' caret in
+Insert. The width is approximate with proportional fonts. On macOS, line motions
+use Command+Left/Right; `Esc` leaves Insert on the last character when Braille text
+is available.
 
-To use it in Chrome or a Chromium browser, disable the store version of DocsKeys,
-open your browser's Extensions page, enable Developer mode, choose **Load unpacked**,
-and select this folder. Reload your Google Docs tabs. Press `Esc` for the block
-cursor and `i` for the thin caret. Disable Vimium on Google Docs if installed.
+- `>>` / `<<`: indent / unindent. Counts work (`3>>`); Visual mode uses `>` / `<`.
+  Indentation applies to paragraphs/list items covered by the selected displayed lines.
+- `D` / `C`: delete to line end / delete and enter Insert.
+- `dt<char>` / `df<char>`: delete before / through the next character on the line.
+- Normal `~`, Visual `U` / `u` / `~`: toggle case, uppercase or lowercase using Docs'
+  native commands to preserve formatting. Normal `u` remains Undo.
+- `:w`: send Save (Docs still autosaves).
+- Select lines with `V`, then `:normal Itext` / `:normal Atext` to prefix / suffix
+  each selected paragraph. Only these two `:normal` forms are supported.
 
-Indent with `>>`, unindent with `<<`. Counts work: `3>>` selects three displayed
-lines and indents their paragraphs. In Visual mode use `>` or `<`; for example,
-`Vjj>` indents the paragraphs covered by the selection. Google Docs indentation
-applies to whole paragraphs/list items, including their wrapped lines.
-
-Also added: `D` / `C` (delete to line end / delete and insert), `dt<char>` /
-`df<char>` (delete before / through the next character), Normal `~`, and Visual
-`U` / `u` / `~` for case changes. Normal `u` remains Undo. Case changes use Docs'
-native capitalization commands to keep formatting.
-
-Press `:` for `:w` (Docs still autosaves). After selecting lines with `V`, use
-`:normal Itext` or `:normal Atext` to insert text at each selected paragraph's
-start or end. These are the supported `:normal` forms, not a full Vim parser.
-Press Enter to run a command or Esc to cancel. There is no macro recording.
+Press Enter to run a command or Esc to cancel. Macros and rectangular selection
+are not supported.
 
 A browser extension that brings Vim-style keyboard shortcuts to Google Docs, allowing you to edit documents with familiar Vim motions and commands.
 
@@ -107,14 +98,15 @@ When in visual mode (`v` or `V`):
 
 ### Install from source
 
-#### Chrome
+#### Chrome / Helium
+- Disable the store version of DocsKeys to avoid running both versions
 - Clone or download this repository
 - Navigate to `chrome://extensions` in Chrome
 - Toggle into Developer Mode
 - Click on "Load Unpacked Extension..."
-- Select the docskeys folder
+- Select this repository's folder and reload your Google Docs tabs
 
-#### Firefox
+#### Firefox (upstream branch)
 - Clone or download the [firefox branch](https://github.com/tirthd16/dockeys/tree/firefox) of this repository
 - Navigate to `about:debugging` in Firefox
 - Click on "This Firefox"
@@ -124,7 +116,7 @@ When in visual mode (`v` or `V`):
 ## Usage
 
 1. Open a Google Doc
-2. Extension will automatically activate
+2. Enable Screen reader support and Braille support in Docs' Accessibility settings
 3. Start using Vim commands in normal mode
 4. Press `i` or `a` to enter insert mode for regular typing
 5. Press `Esc` to return to normal mode
