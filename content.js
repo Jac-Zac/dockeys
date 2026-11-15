@@ -9,11 +9,40 @@
 // before sending to layout engine and interpret them into respective vim motion/command.
 // Then implement those motions by sending relevant keystrokes. Essentially doing a keystroke to keystroke remapping. 
 
-const iframe = document.getElementsByTagName('iframe')[0]   // https://stackoverflow.com/a/4388829
+function initializeDocsKeys() {
+const iframe = document.querySelector('.docs-texteventtarget-iframe')
+if (!iframe?.contentDocument?.body) {
+    setTimeout(initializeDocsKeys, 100)
+    return
+}
 iframe.contentDocument.addEventListener('keydown', eventHandler, true)
 
-const cursorTop = document.getElementsByClassName("kix-cursor-top")[0] // element to edit to show normal vs insert mode
 let mode = 'normal'
+let pendingIndent = null
+let pendingFind = null
+let operationRunning = false
+let editRequestId = 0
+const settle = () => new Promise(resolve => setTimeout(resolve, 50))
+let cursorRoot = null
+
+function updateCursorAppearance() {
+    // Collaborator cursors have a name label; the local cursor's label is empty.
+    const nextRoot = Array.from(document.querySelectorAll('.kix-cursor')).find(cursor =>
+        cursor.querySelector('.kix-cursor-caret') &&
+        !cursor.querySelector('.kix-cursor-name')?.textContent.trim()
+    )
+    if (cursorRoot !== nextRoot) {
+        cursorRoot?.classList.remove('docskeys-block-cursor')
+        cursorRoot = nextRoot
+    }
+    cursorRoot?.classList.toggle('docskeys-block-cursor', mode !== 'insert')
+}
+
+// Docs can replace its cursor when switching document tabs or rebuilding a page.
+new MutationObserver(() => {
+    if (!cursorRoot?.isConnected) updateCursorAppearance()
+}).observe(document.body, { childList: true, subtree: true })
+
 let tempnormal = false // State variable for indicating temperory normal mode
 let multipleMotion = {
     times:0,
@@ -39,6 +68,9 @@ const keyCodes = {
     up: 38,
     right: 39,
     down: 40,
+    bracketLeft: 219,
+    bracketRight: 221,
+    save: 83,
     "delete": 46,
 };
 
@@ -76,6 +108,7 @@ modeIndicator.style.zIndex = '9999'
 document.body.appendChild(modeIndicator)
 
 function updateModeIndicator(currentMode) {
+    updateCursorAppearance()
     modeIndicator.textContent = currentMode.toUpperCase()
     switch(currentMode) {
         case 'normal':
@@ -115,25 +148,21 @@ function switchModeToVisual() {
 function switchModeToVisualLine() {
     mode = 'visualLine'
     updateModeIndicator(mode)
-    sendKeyEvent('home')
+    goToStartOfLine()
     sendKeyEvent('down', { shift: true })
 }
 
 function switchModeToNormal() {
+    pendingIndent = null
+    pendingFind = null
     if (mode == "visualLine" || mode == "waitForFirstInput") sendKeyEvent("left")
     mode = 'normal'
     updateModeIndicator(mode)
-
-    //caret indicating visual mode 
-    cursorTop.style.opacity = 1
-    cursorTop.style.display = "block"
-    cursorTop.style.backgroundColor = "black"
 }
 
 function switchModeToInsert() {
     mode = 'insert'
     updateModeIndicator(mode)
-    cursorTop.style.opacity = 0
 }
 
 function switchModeToWait() {
@@ -151,20 +180,198 @@ function switchModeToWait2() {
 let longStringOp = ""
 
 
-function goToStartOfLine() {
-    sendKeyEvent("home")
+function goToStartOfLine(shift = false) {
+    sendKeyEvent(isMac ? 'left' : 'home', { shift, meta: isMac })
 }
 
-function goToEndOfLine() {
-    sendKeyEvent("end")
+function goToEndOfLine(shift = false) {
+    sendKeyEvent(isMac ? 'right' : 'end', { shift, meta: isMac })
 }
 
 function selectToStartOfLine() {
-    sendKeyEvent("home", { shift: true })
+    goToStartOfLine(true)
 }
 
 function selectToEndOfLine() {
-    sendKeyEvent("end", { shift: true })
+    goToEndOfLine(true)
+}
+
+function indentLines(key, count = 1) {
+    const selecting = mode === 'visual' || mode === 'visualLine' || count > 1
+    if (count > 1) {
+        goToStartOfLine()
+        for (let i = 1; i < count; i++) sendKeyEvent('down', { shift: true })
+        selectToEndOfLine()
+    }
+    sendKeyEvent(key === '>' ? 'bracketRight' : 'bracketLeft', { [isMac ? 'meta' : 'control']: true })
+    if (selecting) sendKeyEvent('left')
+    mode = 'normal'
+    updateModeIndicator(mode)
+}
+
+function focusEditor() {
+    iframe.contentWindow.focus()
+    const doc = iframe.contentDocument
+    ;(doc.querySelector('[contenteditable="true"]') || doc.body).focus()
+}
+
+function deleteToEnd(change) {
+    selectToEndOfLine()
+    if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('backspace')
+    if (change) switchModeToInsert()
+    else switchModeToNormal()
+}
+
+function findForOperator(character) {
+    const find = pendingFind
+    pendingFind = null
+    selectToEndOfLine()
+    const sel = iframe.contentWindow.getSelection()
+    const remaining = Array.from(sel.toString())
+    if (!sel.isCollapsed) sendKeyEvent('left')
+    const index = remaining.indexOf(character, 1)
+    if (index < 0) { switchModeToNormal(); return }
+    const count = index + (find.motion === 'f' ? 1 : 0)
+    for (let i = 0; i < count; i++) sendKeyEvent('right', { shift: true })
+    if (find.operator === 'y') runLongStringOp('y')
+    else {
+        sendKeyEvent('backspace')
+        if (find.operator === 'c') switchModeToInsert()
+        else switchModeToNormal()
+    }
+}
+
+async function runOperation(action) {
+    if (operationRunning) return
+    operationRunning = true
+    try { await action() }
+    catch (error) { console.warn('DocsKeys:', error) }
+    finally { operationRunning = false; switchModeToNormal() }
+}
+
+document.addEventListener('keydown', event => {
+    if (operationRunning && event.key === 'Escape') operationRunning = false
+}, true)
+
+function replaceText(text) {
+    return new Promise((resolve, reject) => {
+        const id = ++editRequestId
+        const finish = event => {
+            if (event.detail.id !== id) return
+            clearTimeout(timer)
+            window.removeEventListener('doc-keys-edit-result', finish)
+            if (event.detail.error) reject(new Error(event.detail.error))
+            else resolve()
+        }
+        const timer = setTimeout(() => {
+            window.removeEventListener('doc-keys-edit-result', finish)
+            reject(new Error('Editor did not confirm the edit'))
+        }, 2000)
+        window.addEventListener('doc-keys-edit-result', finish)
+        window.dispatchEvent(new CustomEvent('doc-keys-edit-text', { detail: { id, text } }))
+    })
+}
+
+async function capitalizeSelection(label) {
+    const format = Array.from(document.querySelectorAll('.menu-button')).find(el => el.textContent.trim() === 'Format')
+    if (!format) throw new Error('Format menu unavailable')
+    simulateClick(format)
+    for (const caption of ['Text', 'Capitalization', label]) {
+        let item
+        for (let attempt = 0; attempt < 30 && operationRunning; attempt++) {
+            item = Array.from(document.querySelectorAll('.goog-menuitem')).find(el =>
+                el.getClientRects().length > 0 && el.innerText.trim().toLowerCase().startsWith(caption.toLowerCase()))
+            if (item) break
+            await settle()
+        }
+        if (!item) throw new Error('Capitalization menu unavailable')
+        simulateClick(item)
+    }
+    focusEditor()
+    await settle()
+}
+
+function changeCase(key, count = 1) {
+    const visual = mode === 'visual' || mode === 'visualLine'
+    const selected = iframe.contentWindow.getSelection().toString()
+    void runOperation(async () => {
+        if (key === 'U' || key === 'u') {
+            if (!selected) return
+            await capitalizeSelection(key === 'U' ? 'UPPERCASE' : 'lowercase')
+            if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('left')
+            return
+        }
+        if (visual) {
+            count = Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(selected)).length
+            if (selected) sendKeyEvent('left')
+        }
+        for (let i = 0; i < count && operationRunning; i++) {
+            sendKeyEvent('right', { shift: true })
+            await settle()
+            const sel = iframe.contentWindow.getSelection()
+            const character = sel.toString()
+            if (!character || (!visual && /[\r\n]/.test(character))) {
+                if (!sel.isCollapsed) sendKeyEvent('left')
+                break
+            }
+            if (character.toLowerCase() !== character.toUpperCase()) {
+                await capitalizeSelection(character === character.toLowerCase() ? 'UPPERCASE' : 'lowercase')
+            }
+            if (!iframe.contentWindow.getSelection().isCollapsed) sendKeyEvent('right')
+        }
+    })
+}
+
+function openCommandLine() {
+    const visual = mode === 'visual' || mode === 'visualLine'
+    const previousMode = mode
+    const selected = visual ? iframe.contentWindow.getSelection().toString() : ''
+    const input = document.createElement('input')
+    input.setAttribute('aria-label', 'Vim command')
+    input.placeholder = ':w | :normal Itext | :normal Atext'
+    input.value = visual ? "'<,'>" : ''
+    Object.assign(input.style, { position: 'fixed', bottom: '20px', left: '20px',
+        width: 'min(600px, 65vw)', padding: '8px', font: '16px monospace', zIndex: '10000' })
+    const close = () => { input.remove(); focusEditor(); mode = previousMode }
+    input.addEventListener('keydown', event => {
+        event.stopPropagation()
+        if (event.key === 'Escape') { event.preventDefault(); close(); return }
+        if (event.key !== 'Enter') return
+        event.preventDefault()
+        const command = input.value.replace(/^'<,'>\s*/, '').replace(/^:/, '').trimStart()
+        if (/^w\s*$/.test(command)) {
+            close()
+            sendKeyEvent('save', { [isMac ? 'meta' : 'control']: true })
+            switchModeToNormal()
+            return
+        }
+        const match = command.match(/^norm(?:al)?!?\s+([IA])(.*)$/)
+        if (!match) { input.style.borderColor = 'red'; return }
+        close()
+        const rows = selected ? selected.split('\n') : ['']
+        if (selected.endsWith('\n')) rows.pop()
+        void runOperation(async () => {
+            if (!match[2]) return
+            await settle()
+            if (visual && selected) {
+                sendKeyEvent('right')
+                if (selected.endsWith('\n')) sendKeyEvent('left')
+            }
+            const sel = iframe.contentWindow.getSelection()
+            if (sel.focusOffset > 0) goToStartOfPara()
+            for (let i = rows.length - 1; i >= 0 && operationRunning; i--) {
+                if (document.activeElement !== iframe || !document.hasFocus()) break
+                if (match[1] === 'A' && rows[i]) sendKeyEvent('down', paragraphMods())
+                else if (match[1] === 'A') goToEndOfLine()
+                await settle()
+                await replaceText(match[2])
+                goToStartOfPara()
+                if (i > 0) goToStartOfPara()
+            }
+        })
+    })
+    document.body.appendChild(input)
+    input.focus()
 }
 
 function selectToStartOfWord() {
@@ -236,7 +443,6 @@ function runLongStringOp(operation = longStringOp) {
             break
         case "d":
             clickMenu(menuItems.cut)
-            sendKeyEvent('backspace')
             mode = 'normal'
             switchModeToNormal()
             break
@@ -275,6 +481,11 @@ function waitForSecondInput(key) {
 
 function waitForFirstInput(key) {
     switch (key) {
+        case 't':
+        case 'f':
+            pendingFind = { motion: key, operator: longStringOp }
+            mode = 'waitForFindCharacter'
+            break
         case "i":
         case "a":
             switchModeToWait2()
@@ -336,6 +547,17 @@ function handleMultipleMotion(key) {
         return
     }
 
+    if (multipleMotion.mode === 'normal' && (key === '>' || key === '<')) {
+        pendingIndent = { key, count: multipleMotion.times }
+        mode = 'normal'
+        return
+    }
+    if (multipleMotion.mode === 'normal' && key === '~') {
+        mode = 'normal'
+        changeCase(key, multipleMotion.times)
+        return
+    }
+
     switch (multipleMotion.mode) {
         case "normal":
             repeatMotion(handleKeyEventNormal,multipleMotion.times,key)
@@ -355,6 +577,11 @@ function eventHandler(e) {
     if (
         ["Shift","Meta","Control","Alt",""].includes(e.key)
     ) return
+    if (operationRunning) {
+        e.preventDefault()
+        if (e.key === 'Escape') operationRunning = false
+        return
+    }
         
     
     if (e.ctrlKey && mode=='insert' && e.key=='o' ){
@@ -369,6 +596,11 @@ function eventHandler(e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (e.key == 'Escape') {
         e.preventDefault()
+        const sel = iframe.contentWindow.getSelection()
+        if (mode === 'insert' && sel?.isCollapsed && sel.focusNode?.nodeType === 3 &&
+            sel.focusOffset > 0 && sel.focusNode.textContent[sel.focusOffset - 1] !== '\n') {
+            sendKeyEvent('left')
+        }
         if (mode == 'visualLine' || mode == 'visual') {
             sendKeyEvent("right")
         }
@@ -377,6 +609,14 @@ function eventHandler(e) {
     }
     if (mode != 'insert') {
         e.preventDefault()
+        if (pendingIndent && mode === 'normal') {
+            const pending = pendingIndent
+            pendingIndent = null
+            if (e.key === pending.key) {
+                indentLines(e.key, pending.count)
+                return
+            }
+        }
         switch (mode) {
             case "normal":
                 handleKeyEventNormal(e.key)
@@ -390,6 +630,9 @@ function eventHandler(e) {
                 break
             case "waitForSecondInput":
                 waitForSecondInput(e.key)
+                break
+            case 'waitForFindCharacter':
+                findForOperator(e.key)
                 break
             case "waitForVisualInput":
                 waitForVisualInput(e.key)
@@ -410,6 +653,20 @@ function handleKeyEventNormal(key) {
     }
     
     switch (key) {
+        case ':':
+            openCommandLine()
+            break
+        case '~':
+            changeCase(key)
+            break
+        case 'D':
+        case 'C':
+            deleteToEnd(key === 'C')
+            break
+        case '>':
+        case '<':
+            pendingIndent = { key, count: 1 }
+            break
         case "h":
             sendKeyEvent("left")
             break
@@ -529,6 +786,18 @@ function handleKeyEventVisualLine(key) {
     }
 
     switch (key) {
+        case ':':
+            openCommandLine()
+            break
+        case 'U':
+        case 'u':
+        case '~':
+            changeCase(key)
+            break
+        case '>':
+        case '<':
+            indentLines(key)
+            break
         case "":
             break
         case "h":
@@ -701,3 +970,6 @@ function activateTopLevelMenu(menuCaption) {
 
 // Initiate to Normal Mode
 switchModeToNormal()
+
+}
+initializeDocsKeys()

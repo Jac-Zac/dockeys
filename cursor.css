@@ -1,0 +1,20 @@
+/* Only the cursor identified by DocsKeys gets a block; collaborators keep theirs. */
+.docskeys-block-cursor .kix-cursor-caret {
+    border-color: transparent !important;
+    border-left-width: 0 !important;
+}
+
+.docskeys-block-cursor .kix-cursor-caret::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    height: 100%;
+    aspect-ratio: 1 / 2;
+    background: rgba(26, 115, 232, 0.4);
+    pointer-events: none;
+}
+
+.docskeys-block-cursor .kix-cursor-top {
+    visibility: hidden !important;
+}

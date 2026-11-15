@@ -59,3 +59,31 @@ window.addEventListener("doc-keys-simulate-keypress", function(event) {
     simulateKeyEvent("keyup", editorEl, args);
 });
 
+// Plain-text insertion at the current Docs accessibility selection, used by :normal I/A.
+window.addEventListener('doc-keys-edit-text', async event => {
+    const { id, text } = event.detail
+    const result = error => window.dispatchEvent(new CustomEvent('doc-keys-edit-result', { detail: { id, error } }))
+    const frame = document.querySelector('.docs-texteventtarget-iframe')
+    const doc = frame?.contentDocument
+    const target = doc?.querySelector('[contenteditable="true"]') || doc?.body
+    if (!target || document.activeElement !== frame || typeof text !== 'string') {
+        result('Editor unavailable')
+        return
+    }
+    const before = target.textContent
+    let observer, timer
+    const changed = new Promise(resolve => {
+        observer = new MutationObserver(() => { if (target.textContent !== before) resolve(true) })
+        observer.observe(target, { childList: true, characterData: true, subtree: true })
+        timer = setTimeout(() => resolve(false), 1500)
+    })
+    try {
+        const data = new DataTransfer()
+        data.setData('text/plain', text)
+        target.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertReplacementText',
+            data: text, dataTransfer: data, bubbles: true, cancelable: true }))
+        result(await changed ? null : 'Edit not confirmed')
+    } catch (error) { result(error.message) }
+    finally { observer.disconnect(); clearTimeout(timer) }
+})
+

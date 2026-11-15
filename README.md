@@ -1,5 +1,32 @@
 # DocsKeys
 
+This local build adds a translucent blue block cursor in Normal and Visual modes,
+and restores Google's caret in Insert mode. The block follows the caret and scales
+with its height; its width is approximate for proportional fonts.
+`Esc` leaves Insert mode on the last character when Braille text is available.
+On macOS, line motions (`0`, `$`, `I`, `A`, and selections using them) now use
+Command+Left/Right instead of Home/End.
+
+To use it in Chrome or a Chromium browser, disable the store version of DocsKeys,
+open your browser's Extensions page, enable Developer mode, choose **Load unpacked**,
+and select this folder. Reload your Google Docs tabs. Press `Esc` for the block
+cursor and `i` for the thin caret. Disable Vimium on Google Docs if installed.
+
+Indent with `>>`, unindent with `<<`. Counts work: `3>>` selects three displayed
+lines and indents their paragraphs. In Visual mode use `>` or `<`; for example,
+`Vjj>` indents the paragraphs covered by the selection. Google Docs indentation
+applies to whole paragraphs/list items, including their wrapped lines.
+
+Also added: `D` / `C` (delete to line end / delete and insert), `dt<char>` /
+`df<char>` (delete before / through the next character), Normal `~`, and Visual
+`U` / `u` / `~` for case changes. Normal `u` remains Undo. Case changes use Docs'
+native capitalization commands to keep formatting.
+
+Press `:` for `:w` (Docs still autosaves). After selecting lines with `V`, use
+`:normal Itext` or `:normal Atext` to insert text at each selected paragraph's
+start or end. These are the supported `:normal` forms, not a full Vim parser.
+Press Enter to run a command or Esc to cancel. There is no macro recording.
+
 A browser extension that brings Vim-style keyboard shortcuts to Google Docs, allowing you to edit documents with familiar Vim motions and commands.
 
 While this extension currently implements core Vim functionality including basic motions, text manipulation, and visual selections, there's room for expansion. Contributions are welcome to add more Vim features as per your need.
